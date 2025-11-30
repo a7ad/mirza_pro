@@ -1159,6 +1159,144 @@ $textonebuy
             )
         ));
         break;
+
+        case 'renew_subscription':
+        if ($method !== "POST") {
+            echo json_encode([
+                'status' => false,
+                'msg' => "Method invalid; must be POST",
+            ]);
+            return;
+        }
+        
+        $user_info = select("user", "*", "token", $tokencheck, "select");
+        if (!$user_info) {
+            http_response_code(404);
+            echo json_encode([
+                'status' => false,
+                'msg' => "User Not Found",
+            ]);
+            return;
+        }
+        
+        $username = $data['username'];
+        $renewal_period = isset($data['renewal_period']) ? (int)$data['renewal_period'] : 30;
+        
+        $invoice = select("invoice", "*", "username", $username, "select");
+        if (!$invoice || $invoice['id_user'] != $user_info['id']) {
+            http_response_code(404);
+            echo json_encode([
+                'status' => false,
+                'msg' => "Subscription not found or you don't have permission",
+            ]);
+            return;
+        }
+        
+        $panel = select("marzban_panel", "*", "name_panel", $invoice['Service_location'], "select");
+        if (!$panel) {
+            http_response_code(404);
+            echo json_encode([
+                'status' => false,
+                'msg' => "Panel Not Found",
+            ]);
+            return;
+        }
+        
+        $renewal_price = ($invoice['price_product'] / $invoice['Service_time']) * $renewal_period;
+        if (intval($user_info['pricediscount']) != 0) {
+            $discount = ($renewal_price * $user_info['pricediscount']) / 100;
+            $renewal_price = $renewal_price - $discount;
+        }
+        
+        if ($user_info['Balance'] < $renewal_price) {
+            http_response_code(402);
+            echo json_encode([
+                'status' => false,
+                'msg' => "موجودی کافی نیست. قیمت تمدید: " . number_format($renewal_price) . " تومان",
+                'obj' => [
+                    'required_balance' => $renewal_price,
+                    'current_balance' => $user_info['Balance']
+                ]
+            ]);
+            return;
+        }
+        
+        $currentUserData = $ManagePanel->DataUser($panel['name_panel'], $username);
+        if (!$currentUserData || !isset($currentUserData['expire'])) {
+            http_response_code(502);
+            echo json_encode([
+                'status' => false,
+                'msg' => "Unable to fetch current subscription data",
+            ]);
+            return;
+        }
+        
+        $currentExpire = $currentUserData['expire'];
+        $newExpire = $currentExpire + ($renewal_period * 24 * 60 * 60);
+        
+        $updateResult = $ManagePanel->updateUser($panel['name_panel'], $username, ['expire' => $newExpire]);
+        if (!$updateResult || isset($updateResult['error'])) {
+            http_response_code(500);
+            echo json_encode([
+                'status' => false,
+                'msg' => "Failed to renew subscription. Please contact support.",
+            ]);
+            return;
+        }
+        
+        $newBalance = $user_info['Balance'] - $renewal_price;
+        update("user", "Balance", $newBalance, "id", $user_info['id']);
+        
+        $randomString = bin2hex(random_bytes(4));
+        $stmt = $connect->prepare("INSERT INTO invoice (id_user, id_invoice, username, time_sell, Service_location, name_product, price_product, Volume, Service_time, Status, note, refral) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $Status = "active";
+        $date = time();
+        $renewal_note = "تمدید اشتراک - " . $renewal_period . " روز";
+        $stmt->bind_param("ssssssssssss", $user_info['id'], $randomString, $username, $date, $panel['name_panel'], $renewal_note, $renewal_price, $invoice['Volume'], $renewal_period, $Status, $renewal_note, $user_info['affiliates']);
+        $stmt->execute();
+        $stmt->close();
+        
+        $text_renewal = "✅ اشتراک شما با موفقیت تمدید شد\n\n";
+        $text_renewal .= "🔑 نام کاربری: <code>$username</code>\n";
+        $text_renewal .= "📅 مدت تمدید: $renewal_period روز\n";
+        $text_renewal .= "💰 مبلغ پرداختی: " . number_format($renewal_price) . " تومان\n";
+        $text_renewal .= "💵 موجودی باقیمانده: " . number_format($newBalance) . " تومان\n";
+        $text_renewal .= "🔢 کد پیگیری: $randomString";
+        
+        sendmessage($user_info['id'], $text_renewal, null, 'HTML');
+        
+        $timejalali = jdate('Y/m/d H:i:s');
+        $report_text = "🔄 تمدید اشتراک در مینی اپ\n\n";
+        $report_text .= "▫️آیدی کاربر: <code>{$user_info['id']}</code>\n";
+        $report_text .= "▫️نام کاربری تلگرام: @{$user_info['username']}\n";
+        $report_text .= "▫️نام کاربری سرویس: $username\n";
+        $report_text .= "▫️مدت تمدید: $renewal_period روز\n";
+        $report_text .= "▫️مبلغ: " . number_format($renewal_price) . " تومان\n";
+        $report_text .= "▫️کد پیگیری: $randomString\n";
+        $report_text .= "▫️زمان: $timejalali";
+        
+        if (strlen($setting['Channel_Report']) > 0) {
+            telegram('sendmessage', [
+                'chat_id' => $setting['Channel_Report'],
+                'text' => $report_text,
+                'parse_mode' => "HTML"
+            ]);
+        }
+        
+        echo json_encode([
+            'status' => true,
+            'msg' => "Subscription renewed successfully",
+            'obj' => [
+                'order_id' => $randomString,
+                'username' => $username,
+                'renewal_period' => $renewal_period,
+                'price' => $renewal_price,
+                'new_balance' => $newBalance,
+                'new_expire' => $newExpire
+            ]
+        ]);
+        break;
+
     default:
         echo json_encode([
             'status' => false,
