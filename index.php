@@ -1195,6 +1195,7 @@ $nameconfig";
                 [
                     ['text' => $textbotlang['users']['extend']['title'], 'callback_data' => 'extend_' . $username],
                     ['text' => $textbotlang['users']['Extra_volume']['sellextra'], 'callback_data' => 'Extra_volume_' . $username],
+                            ['text' => '🔄 تمدید سریع ۳۰ روزه', 'callback_data' => 'quick_renew_' . $username],
                 ],
                 [
                     ['text' => "❌ حذف سرویس", 'callback_data' => 'removeauto-' . $username],
@@ -7859,6 +7860,53 @@ $stmt->execute([
         ]);
     }
 }
+
+// Quick Renewal Callback Handler
+if (strstr($datain, 'quick_renew_')) {
+    $username = str_replace('quick_renew_', '', $datain);
+    
+    // Get subscription details
+    $sql = "SELECT * FROM invoice WHERE username = :username AND status = 'active' ORDER BY id DESC LIMIT 1";
+    $stmt = $pdo->prepare($sql);
+    $stmt->bindParam(':username', $username, PDO::PARAM_STR);
+    $stmt->execute();
+    $subscription = $stmt->fetch();
+    
+    if ($subscription) {
+        // Call the renewal API
+        $api_url = "https://" . $_SERVER['HTTP_HOST'] . "/api/miniapp.php";
+        $post_data = [
+            'action' => 'renew_subscription',
+            'user_id' => $from_id,
+            'subscription_id' => $subscription['id'],
+            'days' => 30
+        ];
+        
+        $ch = curl_init($api_url);
+        curl_setopt($ch, CURLOPT_POST, 1);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($post_data));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+        $response = curl_exec($ch);
+        curl_close($ch);
+        
+        $result = json_decode($response, true);
+        
+        if ($result && $result['success']) {
+            $message = "✅ تمدید موفقیت‌آمیز!\n\n";
+            $message .= "🔄 سرویس شما برای 30 روز تمدید شد\n";
+            $message .= "💰 مبلغ پرداختی: " . number_format($result['data']['amount']) . " تومان";
+            Editmessagetext($from_id, $message_id, $message, 'html');
+        } else {
+            $error_msg = $result['message'] ?? 'خطای ناشناخته';
+            Editmessagetext($from_id, $message_id, "❌ خطا: " . $error_msg, 'html');
+        }
+    } else {
+        Editmessagetext($from_id, $message_id, "❌ اشتراک فعالی یافت نشد", 'html');
+    }
+    exit;
+}
+
 if (in_array($from_id, $admin_ids))
     require_once 'admin.php';
 
