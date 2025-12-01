@@ -1572,6 +1572,12 @@ function update_bot() {
     else
         ZIP_URL=$(curl -s https://api.github.com/repos/a7ad/mirza_pro/releases/latest | grep "zipball_url" | cut -d '"' -f4)
     fi
+    
+ # Fallback to main branch if ZIP_URL is empty or invalid
+  if [ -z "$ZIP_URL" ]; then
+       echo -e "\e[93mWarning: Failed to get latest release URL. Using main branch instead...\033[0m"
+            ZIP_URL="https://github.com/a7ad/mirza_pro/archive/refs/heads/main.zip"
+             fi
 
     TEMP_DIR="/tmp/mirzabot_update"
     mkdir -p "$TEMP_DIR"
